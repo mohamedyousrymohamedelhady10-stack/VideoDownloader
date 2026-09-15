@@ -4,12 +4,12 @@ import shutil
 import yt_dlp
 
 
-def download(url, output_dir):
+def clean_directory(output_dir):
     os.makedirs(output_dir, exist_ok=True)
 
-    # تنظيف أي ملفات متبقية من محاولة سابقة
     for name in os.listdir(output_dir):
         path = os.path.join(output_dir, name)
+
         try:
             if os.path.isfile(path) or os.path.islink(path):
                 os.remove(path)
@@ -18,13 +18,32 @@ def download(url, output_dir):
         except Exception:
             pass
 
-    opts = {
-        "format": "bv*[height<=720]+ba/b[height<=720]/b",
+
+def find_file(output_dir, suffix):
+    for name in os.listdir(output_dir):
+        path = os.path.join(output_dir, name)
+
+        if os.path.isfile(path) and name.endswith(suffix):
+            return path
+
+    return None
+
+
+def download(url, output_dir):
+
+    clean_directory(output_dir)
+
+    # -------------------------------------------------
+    # أولًا: نحاول تحميل فيديو + صوت بشكل منفصل
+    # بدون أي عملية دمج داخل yt-dlp
+    # -------------------------------------------------
+
+    video_opts = {
+        "format": "bv*[height<=720]",
         "outtmpl": os.path.join(
             output_dir,
-            "%(title)s.%(ext)s"
+            "%(title)s.video.%(ext)s"
         ),
-        "merge_output_format": "mp4",
         "noplaylist": True,
         "concurrent_fragment_downloads": 8,
         "quiet": True,
@@ -32,101 +51,153 @@ def download(url, output_dir):
         "restrictfilenames": True,
     }
 
-    with yt_dlp.YoutubeDL(opts) as ydl:
+    audio_opts = {
+        "format": "ba",
+        "outtmpl": os.path.join(
+            output_dir,
+            "%(title)s.audio.%(ext)s"
+        ),
+        "noplaylist": True,
+        "concurrent_fragment_downloads": 8,
+        "quiet": True,
+        "no_warnings": True,
+        "restrictfilenames": True,
+    }
 
-        info = ydl.extract_info(
-            url,
-            download=True
+    try:
+
+        # الحصول على معلومات الفيديو فقط
+        with yt_dlp.YoutubeDL({
+            "quiet": True,
+            "no_warnings": True,
+            "noplaylist": True,
+        }) as ydl:
+
+            info = ydl.extract_info(
+                url,
+                download=False
+            )
+
+        title = str(
+            info.get("title")
+            or "Video"
         )
 
-        requested = (
-            info.get("requested_downloads")
-            or []
-        )
+        # محاولة تحميل الفيديو فقط
+        video_path = None
 
-        # ملف واحد مكتمل بالفعل
-        if not requested:
+        try:
 
-            path = ydl.prepare_filename(info)
+            with yt_dlp.YoutubeDL(video_opts) as ydl:
 
-            if os.path.isfile(path):
+                ydl.download([url])
 
-                return json.dumps({
-                    "mode": "single",
-                    "video": path,
-                    "title": str(
-                        info.get("title")
-                        or "Video"
+            for name in os.listdir(output_dir):
+
+                if ".video." in name:
+
+                    path = os.path.join(
+                        output_dir,
+                        name
                     )
-                })
 
-        candidates = [
-            os.path.join(output_dir, n)
-            for n in os.listdir(output_dir)
-            if os.path.isfile(
-                os.path.join(output_dir, n)
-            )
-        ]
+                    if os.path.isfile(path):
+                        video_path = path
+                        break
 
-        video = None
-        audio = None
+        except Exception:
+            video_path = None
 
-        for item in candidates:
+        # محاولة تحميل الصوت فقط
+        audio_path = None
 
-            low = item.lower()
+        if video_path:
 
-            if (
-                low.endswith(
-                    (
-                        ".mp4",
-                        ".webm",
-                        ".mkv",
-                        ".mov"
-                    )
-                )
-                and video is None
-            ):
-                video = item
+            try:
 
-            elif (
-                low.endswith(
-                    (
-                        ".m4a",
-                        ".webm",
-                        ".opus",
-                        ".aac",
-                        ".mp3"
-                    )
-                )
-                and audio is None
-            ):
-                audio = item
+                with yt_dlp.YoutubeDL(audio_opts) as ydl:
 
-        if video and audio:
+                    ydl.download([url])
 
-            title = str(
-                info.get("title")
-                or "Video"
-            )
+                for name in os.listdir(output_dir):
+
+                    if ".audio." in name:
+
+                        path = os.path.join(
+                            output_dir,
+                            name
+                        )
+
+                        if os.path.isfile(path):
+                            audio_path = path
+                            break
+
+            except Exception:
+                audio_path = None
+
+        # -------------------------------------------------
+        # إذا وجدنا فيديو وصوت:
+        # أرسلهم إلى Java ليتم الدمج بواسطة FFmpegKit
+        # -------------------------------------------------
+
+        if video_path and audio_path:
 
             return json.dumps({
                 "mode": "merge",
-                "video": video,
-                "audio": audio,
+                "video": video_path,
+                "audio": audio_path,
                 "title": title
             })
+
+        # -------------------------------------------------
+        # إذا لم يتوفر فيديو منفصل، نحاول تحميل نسخة
+        # progressive تحتوي على الفيديو والصوت معًا
+        # بدون الحاجة إلى FFmpeg
+        # -------------------------------------------------
+
+        clean_directory(output_dir)single_opts = {
+            "format": "b[height<=720]",
+            "outtmpl": os.path.join(
+                output_dir,
+                "%(title)s.%(ext)s"
+            ),
+            "noplaylist": True,
+            "concurrent_fragment_downloads": 8,
+            "quiet": True,
+            "no_warnings": True,
+            "restrictfilenames": True,
+        }
+
+        with yt_dlp.YoutubeDL(single_opts) as ydl:
+
+            ydl.download([url])
+
+        candidates = []
+
+        for name in os.listdir(output_dir):
+
+            path = os.path.join(
+                output_dir,
+                name
+            )
+
+            if os.path.isfile(path):
+                candidates.append(path)
 
         if len(candidates) == 1:
 
             return json.dumps({
                 "mode": "single",
                 "video": candidates[0],
-                "title": str(
-                    info.get("title")
-                    or "Video"
-                )
+                "title": title
             })
 
         raise Exception(
-            "تعذر العثور على ملفات الفيديو التي تم تحميلها."
+            "تعذر العثور على ملف الفيديو الذي تم تحميله."
+        )
+
+    except Exception as e:
+
+        raise Exception(
+            str(e)
         )
