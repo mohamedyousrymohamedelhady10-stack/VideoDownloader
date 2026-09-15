@@ -1,4 +1,4 @@
-[15/09/2026 03:10 ص] Mohamed Yousry: package com.mohamed.videodownloader;
+package com.mohamed.videodownloader;
 
 import android.app.Activity;
 import android.os.Bundle;
@@ -141,8 +141,7 @@ public class MainActivity extends Activity {
                         "\" -map 0:v:0 -map 1:a:0 " +
                         "-c:v copy -c:a aac \"" +
                         output.getAbsolutePath() +
-                        "\"";
-[15/09/2026 03:10 ص] Mohamed Yousry: FFmpegKit.executeAsync(
+                        "\"";FFmpegKit.executeAsync(
                         command,
                         session -> {
 
@@ -309,8 +308,7 @@ public class MainActivity extends Activity {
 
     private void deleteDirectory(
             File dir
-    ) {
-[15/09/2026 03:10 ص] Mohamed Yousry: if (dir == null ||
+    ) {if (dir == null ||
                 !dir.exists()) {
             return;
         }
